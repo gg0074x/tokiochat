@@ -1,3 +1,6 @@
+use std::fmt::Display;
+
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
@@ -16,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn server(ip: String) -> Result<(), Box<dyn std::error::Error>> {
-    let (broadcast, _) = tokio::sync::broadcast::channel::<Vec<u8>>(u8::MAX as usize);
+    let (broadcast, _) = tokio::sync::broadcast::channel::<Message>(u8::MAX as usize);
     let listener = TcpListener::bind(&ip).await?;
     println!("Listening on {ip}");
 
@@ -43,11 +46,12 @@ async fn server(ip: String) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 };
 
-                let message = [&buf[0..n]].concat();
+                let Ok(message) = serde_json::from_slice::<Message>(&buf[..n]) else {
+                    eprintln!("Cannot deserialize message");
+                    continue;
+                };
 
-                println!("Sending message from {addr}: {}", unsafe {
-                    String::from_utf8_unchecked(message.clone())
-                });
+                println!("Sending message from {addr}: {}", message.message);
 
                 broadcast_r.send(message).unwrap();
             }
@@ -60,6 +64,11 @@ async fn server(ip: String) -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 };
 
+                let Ok(msg) = serde_json::to_vec(&msg) else {
+                    eprintln!("Cannot deserialize message");
+                    continue;
+                };
+
                 _ = socket_write.write(&msg).await;
             }
         });
@@ -67,15 +76,14 @@ async fn server(ip: String) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn client(ip: String, user: String) -> Result<(), Box<dyn std::error::Error>> {
-    let (message_sender, message_receiver) = mpsc::channel::<Vec<u8>>(1024);
-    let (input_sender, mut input_receiver) = mpsc::channel::<Vec<u8>>(1024);
+    let (message_sender, message_receiver) = mpsc::channel::<Vec<u8>>(u8::MAX as usize);
+    let (input_sender, mut input_receiver) = mpsc::channel::<Vec<u8>>(u8::MAX as usize);
     let (mut reader, mut writer) = TcpStream::connect(ip).await?.into_split();
 
     let app = App::new(message_receiver, input_sender);
 
     // Read thread
     tokio::spawn(async move {
-        // durisimo
         let mut buf = [0; 1024];
         loop {
             let n = match reader.read(&mut buf).await {
@@ -101,10 +109,13 @@ async fn client(ip: String, user: String) -> Result<(), Box<dyn std::error::Erro
             let Some(msg) = input_receiver.recv().await else {
                 continue;
             };
-            if let Err(e) = writer
-                .write(&[format!("[{user}] ").as_bytes(), &msg].concat().clone())
-                .await
-            {
+
+            let msg = Message::new(user.clone(), unsafe { String::from_utf8_unchecked(msg) });
+            let Ok(msg) = serde_json::to_vec(&msg) else {
+                continue;
+            };
+
+            if let Err(e) = writer.write(&msg).await {
                 eprintln!("Error: {e}");
                 return;
             }
@@ -113,6 +124,24 @@ async fn client(ip: String, user: String) -> Result<(), Box<dyn std::error::Erro
 
     run_tui(app).unwrap();
     Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Message {
+    user: String,
+    message: String,
+}
+
+impl Message {
+    fn new(user: String, msg: String) -> Self {
+        Self { user, message: msg }
+    }
+}
+
+impl Display for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("[{}] {}", self.user, self.message))
+    }
 }
 
 use clap::{Parser, Subcommand};

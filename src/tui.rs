@@ -1,6 +1,6 @@
 /// Ratatui input example
 /// <https://ratatui.rs/examples/apps/user_input/>
-/// Modified to
+/// Modified to serve the purpose of a chat for this project
 use color_eyre::Result;
 use ratatui::{
     DefaultTerminal, Frame,
@@ -11,6 +11,8 @@ use ratatui::{
     widgets::{Block, List, ListItem, Paragraph},
 };
 use tokio::sync::mpsc::{Receiver, Sender};
+
+use crate::Message;
 
 pub fn run_tui(app: App) -> Result<()> {
     color_eyre::install()?;
@@ -109,8 +111,11 @@ impl App {
         self.character_index = 0;
     }
 
-    fn get_message(&mut self, msg: String) {
-        self.messages.push(msg);
+    fn get_message(&mut self, msg: &[u8]) {
+        let Ok(msg) = serde_json::from_slice::<Message>(msg) else {
+            return;
+        };
+        self.messages.push(msg.to_string());
     }
 
     fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
@@ -118,7 +123,7 @@ impl App {
             terminal.draw(|frame| self.draw(frame))?;
 
             while let Ok(msg) = self.message_receiver.try_recv() {
-                self.get_message(unsafe { String::from_utf8_unchecked(msg) });
+                self.get_message(&msg);
             }
 
             if !poll(std::time::Duration::from_millis(50))? {
