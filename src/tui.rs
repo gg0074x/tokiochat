@@ -12,7 +12,7 @@ use ratatui::{
 };
 use tokio::sync::mpsc::{Receiver, Sender};
 
-use crate::Message;
+use crate::structs::Message;
 
 pub fn run_tui(app: App) -> Result<()> {
     color_eyre::install()?;
